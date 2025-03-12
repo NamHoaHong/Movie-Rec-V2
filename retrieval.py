@@ -47,30 +47,75 @@ def extract_genres_and_adjectives(query):
     
     return matched_genres, adjectives
 
-def preprocess_query(query):
+def fetch_movies_from_db(db_path: str = "movies.db") -> list[dict]:
+    """Fetch all movies from the database."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT title, summary, genre FROM movies")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    # Convert to list of dicts
+    movies = [{"title": row[0], "summary": row[1], "genre": row[2]} for row in rows]
+    return movies
+
+def preprocess_and_retrieve(query: str, index, movies: list[dict], db_path: str = "movies.db") -> tuple[dict, float]:
+    """
+    Retrieve one movie: filter by genre first, then weight adjectives if matches exist;
+    otherwise, use adjectives only.
+    
+    Args:
+        query (str): User query, e.g., "exciting action movies"
+        index: FAISS index
+        movies (list[dict]): List of movie dictionaries
+        db_path (str): Path to SQLite database
+    
+    Returns:
+        tuple[dict, float]: Best matching movie and its distance
+    """
+    # Extract genres and adjectives
     matched_genres, adjectives = extract_genres_and_adjectives(query)
     
-    # Boost genres (repeat them 2 times)
-    genre_boost = " ".join(matched_genres) * 2 if matched_genres else ""
+    # Fetch all movies from DB
+    all_movies = fetch_movies_from_db(db_path)
     
-    # Modified query
-    modified_query = f"{query} {genre_boost}"
+    # Step 1: Filter movies by matched genres
+    genre_filtered_movies = []
+    genre_filtered_indices = []
+    for idx, movie in enumerate(all_movies):
+        genres = [g.strip() for g in movie["genre"].split(",")]
+        if any(g.capitalize() in genres for g in matched_genres):  # Match any genre
+            genre_filtered_movies.append(movie)
+            genre_filtered_indices.append(idx)
     
-    return modified_query.strip()
-
-
-def retrieve_movie(query, index, movies):
-    """Retrieve the most relevant movie based on a query."""
-    # Encode the query
-    query = preprocess_query(query)
-    query_embedding = model.encode([query], convert_to_numpy=True)
+    if genre_filtered_movies:
+        # Step 2: Genre matches exist, prioritize adjectives among filtered movies
+        print(f"\nFound {len(genre_filtered_movies)} movies with genres: {matched_genres}")
+        # Create a query focused on adjectives
+        adjective_query = " ".join(adjectives) if adjectives else query
+        query_embedding = model.encode([adjective_query], convert_to_numpy=True)
+        
+        # Subset the FAISS index for genre-matched movies
+        filtered_embeddings = np.array([index.reconstruct(i) for i in genre_filtered_indices])
+        distances, indices = index.search(query_embedding, k=1)  # Top 1 match
+        
+        best_local_index = indices[0][0]
+        best_global_index = genre_filtered_indices[best_local_index]
+        best_movie = movies[best_global_index]
+        distance = distances[0][0]
+    else:
+        # Step 3: No genre matches, use adjectives only on all movies
+        print(f"\nNo movies found with genres: {matched_genres}, using adjectives only")
+        adjective_query = " ".join(adjectives) if adjectives else query
+        query_embedding = model.encode([adjective_query], convert_to_numpy=True)
+        
+        # Search full index
+        distances, indices = index.search(query_embedding, k=1)  # Top 1 match
+        best_index = indices[0][0]
+        best_movie = movies[best_index]
+        distance = distances[0][0]
     
-    # Search FAISS index for the top match
-    distances, indices = index.search(query_embedding, k=1)  # k=1 for top 1 match
-    
-    # Get the best matching movie
-    best_index = indices[0][0]
-    return movies[best_index], distances[0][0]
+    return best_movie, distance
 
 if __name__ == "__main__":
     # Load movies from database
@@ -97,8 +142,8 @@ if __name__ == "__main__":
     ]
     
     for query in test_queries:
-        movie, distance = retrieve_movie(query, index, movies)
-        print(f"\nQuery: '{query}'")
+        movie, distance = preprocess_and_retrieve(query, index, movies)
+        print(f"Query: '{query}'")
         print(f"Retrieved Movie: {movie['title']}")
         print(f"Summary: {movie['summary']}")
         print(f"Genre: {movie['genre']}")
