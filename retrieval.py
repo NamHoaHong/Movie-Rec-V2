@@ -47,72 +47,39 @@ def extract_genres_and_adjectives(query):
     
     return matched_genres, adjectives
 
-def fetch_movies_from_db(db_path: str = "movies.db") -> list[dict]:
-    """Fetch all movies from the database."""
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT title, summary, genre FROM movies")
-    rows = cursor.fetchall()
-    conn.close()
-    
-    # Convert to list of dicts
-    movies = [{"title": row[0], "summary": row[1], "genre": row[2]} for row in rows]
-    return movies
-
-def preprocess_and_retrieve(query: str, index, movies: list[dict], db_path: str = "movies.db") -> tuple[dict, float]:
-    """
-    Retrieve one movie: filter by genre first, then weight adjectives if matches exist;
-    otherwise, use adjectives only.
-    
-    Args:
-        query (str): User query, e.g., "exciting action movies"
-        index: FAISS index
-        movies (list[dict]): List of movie dictionaries
-        db_path (str): Path to SQLite database
-    
-    Returns:
-        tuple[dict, float]: Best matching movie and its distance
-    """
+def preprocess_and_retrieve(query: str, index, movies: list[dict], top_k: int = 1) -> tuple[dict, float]:
     # Extract genres and adjectives
     matched_genres, adjectives = extract_genres_and_adjectives(query)
     
-    # Fetch all movies from DB
-    all_movies = fetch_movies_from_db(db_path)
+    # Use the provided movies list
+    all_movies = movies
     
-    # Step 1: Filter movies by matched genres
+    # Step 1: Filter by genre if applicable
     genre_filtered_movies = []
     genre_filtered_indices = []
     for idx, movie in enumerate(all_movies):
         genres = [g.strip() for g in movie["genre"].split(",")]
-        if any(g.capitalize() in genres for g in matched_genres):  # Match any genre
+        if any(g.capitalize() in genres for g in matched_genres):
             genre_filtered_movies.append(movie)
             genre_filtered_indices.append(idx)
     
     if genre_filtered_movies:
-        # Step 2: Genre matches exist, prioritize adjectives among filtered movies
-        print(f"\nFound {len(genre_filtered_movies)} movies with genres: {matched_genres}")
-        # Create a query focused on adjectives
+        print(f"Found {len(genre_filtered_movies)} movies with genres: {matched_genres}")
         adjective_query = " ".join(adjectives) if adjectives else query
-        query_embedding = model.encode([adjective_query], convert_to_numpy=True)
-        
-        # Subset the FAISS index for genre-matched movies
-        filtered_embeddings = np.array([index.reconstruct(i) for i in genre_filtered_indices])
-        distances, indices = index.search(query_embedding, k=1)  # Top 1 match
-        
+        query_embedding = model.encode([adjective_query])
+        filtered_embs = np.array([index.reconstruct(i) for i in genre_filtered_indices])
+        faiss_index = faiss.IndexFlatL2(filtered_embs.shape[1])
+        faiss_index.add(filtered_embs)
+        distances, indices = faiss_index.search(query_embedding, k=top_k)
         best_local_index = indices[0][0]
         best_global_index = genre_filtered_indices[best_local_index]
         best_movie = movies[best_global_index]
         distance = distances[0][0]
     else:
-        # Step 3: No genre matches, use adjectives only on all movies
-        print(f"\nNo movies found with genres: {matched_genres}, using adjectives only")
-        adjective_query = " ".join(adjectives) if adjectives else query
-        query_embedding = model.encode([adjective_query], convert_to_numpy=True)
-        
-        # Search full index
-        distances, indices = index.search(query_embedding, k=1)  # Top 1 match
-        best_index = indices[0][0]
-        best_movie = movies[best_index]
+        print(f"No genre matches for {matched_genres}, using full search")
+        query_embedding = model.encode([query])
+        distances, indices = index.search(query_embedding, k=top_k)
+        best_movie = movies[indices[0][0]]
         distance = distances[0][0]
     
     return best_movie, distance
