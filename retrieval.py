@@ -48,13 +48,10 @@ def extract_genres_and_adjectives(query):
     return matched_genres, adjectives
 
 def preprocess_and_retrieve(query: str, index, movies: list[dict], top_k: int = 1) -> tuple[dict, float]:
-    # Extract genres and adjectives
     matched_genres, adjectives = extract_genres_and_adjectives(query)
     
-    # Use the provided movies list
     all_movies = movies
     
-    # Step 1: Filter by genre if applicable
     genre_filtered_movies = []
     genre_filtered_indices = []
     for idx, movie in enumerate(all_movies):
@@ -66,7 +63,8 @@ def preprocess_and_retrieve(query: str, index, movies: list[dict], top_k: int = 
     if genre_filtered_movies:
         print(f"Found {len(genre_filtered_movies)} movies with genres: {matched_genres}")
         adjective_query = " ".join(adjectives) if adjectives else query
-        query_embedding = model.encode([adjective_query])
+        genre_query = " ".join(matched_genres) if matched_genres else query
+        query_embedding = model.encode([adjective_query, genre_query])
         filtered_embs = np.array([index.reconstruct(i) for i in genre_filtered_indices])
         faiss_index = faiss.IndexFlatL2(filtered_embs.shape[1])
         faiss_index.add(filtered_embs)
@@ -85,27 +83,24 @@ def preprocess_and_retrieve(query: str, index, movies: list[dict], top_k: int = 
     return best_movie, distance
 
 if __name__ == "__main__":
-    # Load movies from database
     movies = load_movies()
     print(f"Loaded {len(movies)} movies from database.")
 
-    # Debug: Check for None summaries
     none_summaries = [m for m in movies if m['summary'] is None]
     if none_summaries:
         print(f"Found {len(none_summaries)} movies with None summaries:")
         for m in none_summaries:
             print(f"Title: {m['title']}, Genre: {m['genre']}")
 
-    # Build FAISS index
     index, embeddings, movies = build_faiss_index(movies)
     print(f"FAISS index built with {index.ntotal} embeddings.")
 
-    # Test retrieval with sample queries
     test_queries = [
         "happy movie",
         "scary film",
         "exciting action movie",
-        "sad drama"
+        "sad drama",
+        "comedy horror"
     ]
     
     for query in test_queries:
@@ -114,4 +109,4 @@ if __name__ == "__main__":
         print(f"Retrieved Movie: {movie['title']}")
         print(f"Summary: {movie['summary']}")
         print(f"Genre: {movie['genre']}")
-        print(f"Distance: {distance:.4f}")  # Lower distance = better match
+        print(f"Distance: {distance:.4f}")

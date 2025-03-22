@@ -16,19 +16,9 @@ build/
 # SQLite database
 movies.db
 
-# Environment variables and secrets
-.env
-config.py
-
-# IDE-specific files
-.vscode/
-.idea/
-*.sublime-workspace
-
-# Logs and temporary files
+# Node.js/React-related
+node_modules/
+build/
+dist/
 *.log
-*.tmp
-
-# OS-specific files
-.DS_Store
-Thumbs.db
+npm-debug.log*
